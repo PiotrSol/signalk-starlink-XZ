@@ -199,10 +199,9 @@ module.exports = function(app) {
               path: `${STARLINK}.uptime`,
               value: response.dish_get_status.device_state.uptime_s
             },
-		 	},
-			    {
-              path: `${STARLINK}.countryCode`,
-              value: response.dish_get_status.device_state.countryCode
+	    {
+              path: `${STARLINK}.country_code`,
+              value: response.dish_get_status.device_info.country_code
             },
             {
               path: `${STARLINK}.hardware`,
@@ -231,9 +230,9 @@ module.exports = function(app) {
               path: `${STARLINK}.uptime`,
               value: response.dish_get_status.device_state.uptime_s
             },
-			{
-              path: `${STARLINK}.countryCode`,
-              value: response.dish_get_status.device_state.countryCode
+            {
+              path: `${STARLINK}.country_code`,
+              value: response.dish_get_status.device_info.country_code
             },
             {
               path: `${STARLINK}.hardware`,
