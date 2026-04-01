@@ -13,7 +13,7 @@
  * limitations under the License.
  */
 
-const POLL_STARLINK_INTERVAL = 15      // Poll every N seconds
+const POLL_STARLINK_INTERVAL = 60     // Poll every 60 seconds
 const STARLINK = 'network.providers.starlink'
 
 const path = require('path');
@@ -35,12 +35,8 @@ var client = new Device(
 );
 
 var dishyStatus;
-var stowRequested;
-var positions = [];
-var gpsSource;
 var errorCount = 0;
-var previousLatitude;
-var previousLongitude;
+var previousCountryCode;
 
 module.exports = function(app) {
   var plugin = {};
@@ -55,405 +51,177 @@ module.exports = function(app) {
     type: 'object',
     required: [],
     properties: {
-      retrieveGps: {
-        type: "boolean",
-        title: "Use Starlink as a GPS source (requires enabling access on local network)",
-	      default: true
-      },
-      stowWhileMoving: {
-        type: "boolean",
-        title: "Stow Dishy while moving",
-	      default: false
-      },
-      gpsSource: {
-        type: "string",
-        title: "GPS source (Optional - only if you have multiple GPS sources and you want to use an explicit source)"
-      },
       enableStatusNotification: {
         type: "boolean",
         title: "Send a notification when offline",
-	default: true
+        default: true
       },
       statusNotificationState: {
-        title: 'State',
+        title: 'Status Notification State',
         description:
-          'When an offline notifcation is sent, this wil be used as the notitication state',
+          'Notification state when Starlink goes offline',
         type: 'string',
         default: 'warn',
         enum: ['alert', 'warn', 'alarm', 'emergency']
       },
+      enableCountryCodeNotification: {
+        type: "boolean",
+        title: "Send a notification when country code changes between International Waters (XZ - Requires Ocean Mode paid data) and Territorial Waters - ISO3166 Country Code",
+        default: true
+      },
+      countryCodeNotificationState: {
+        title: 'Country Code Change State',
+        description:
+          'Notification state when country code changes between XZ and other countries',
+        type: 'string',
+        default: 'warn',
+        enum: ['alert', 'warn', 'alarm', 'emergency']
+      }
     }
   }
 
   plugin.start = function(options) {
-    gpsSource = options.gpsSource;
-    let subscription = {
-      context: 'vessels.self',
-      subscribe: [{
-        path: 'navigation.position',
-        period: 60 * 1000     // Every minute
-      }]
-    };
-
-    app.subscriptionmanager.subscribe(subscription, unsubscribes, function() {
-      app.debug('Subscription error');
-    }, data => processDelta(options, data));
-
-    pollProcess = setInterval( function() {
-      if (options.retrieveGps) {
-          client.Handle({
-            'get_location': {}
-          }, (error, response) => {
-          if (error) {
-            app.debug('Cannot retrieve position from Starlink');
-            return;
-          }
-          let latitude = response.get_location.lla.lat;
-          let longitude = response.get_location.lla.lon;
-          let values;
-          if ((previousLatitude) && (previousLongitude)) {
-            courseAndSpeedOverGround = calculateCourseAndSpeed(
-              previousLatitude,
-              previousLongitude,
-              latitude,
-              longitude
-            );
-            values = [
-              {
-                path: 'navigation.position',
-                value: {
-                  'longitude': longitude,
-                  'latitude': latitude
-                },
-                }, {
-                  path: 'navigation.courseOverGroundTrue',
-                  value: courseAndSpeedOverGround.course
-                }, {
-                  path: 'navigation.speedOverGround',
-                  value: courseAndSpeedOverGround.speed
-                }
-            ]
-          } else {
-            values = [
-              {
-                path: 'navigation.position',
-                value: {
-                  'longitude': longitude,
-                  'latitude': latitude
-                }
-              }
-            ]
-                }
-          app.handleMessage('signalk-starlink', {
-            updates: [{
-                values: values
-              }]
-          });
-          previousLatitude = latitude;
-          previousLongitude = longitude;
-          app.debug(`Position received from Starlink (${latitude}, ${longitude})`);
-        });
-      }
-
-    	client.Handle({
-    	  'get_status': {}
-  	  }, (error, response) => {
-	      if (error) {
-	        app.debug(`Error reading from Dishy.`);
-	        if (errorCount++ >= 5) {
+    pollProcess = setInterval(function() {
+      client.Handle({
+        'get_status': {}
+      }, (error, response) => {
+        if (error) {
+          app.debug(`Error reading from Dishy.`);
+          if (errorCount++ >= 5) {
             client.close();
             client = new Device(
-    		      "192.168.100.1:9200",
-    		      grpc.credentials.createInsecure()
-	          );
+              "192.168.100.1:9200",
+              grpc.credentials.createInsecure()
+            );
             errorCount = 0;
             app.debug(`Retrying connection`);
-	        }
-	        return;
-        }
-        let values;
-        if (response.dish_get_status.outage) {
-          let duration = response.dish_get_status.outage.duration_ns / 1000 / 1000 /1000;
-          duration = timeSince(duration);
-          app.setPluginStatus(`Starlink has been offline (${response.dish_get_status.outage.cause}) for ${duration}`);
-          dishyStatus = response.dish_get_status.outage.cause;
-    
-          values = [
-            {
-              path: `${STARLINK}.status`,
-              value: 'offline'
-            },
-            {
-              path: `${STARLINK}.outage.cause`,
-              value: response.dish_get_status.outage.cause
-            },
-            {
-              path: `${STARLINK}.outage.start`,
-              value: new Date(response.dish_get_status.outage.start_timestamp_ns/1000/1000)
-            },
-            {
-              path: `${STARLINK}.outage.duration`,
-              value: response.dish_get_status.outage.duration_ns/1000/1000/1000
-            },
-            {
-              path: `${STARLINK}.uptime`,
-              value: response.dish_get_status.device_state.uptime_s
-            },
-	    {
-              path: `${STARLINK}.country_code`,
-              value: response.dish_get_status.device_info.country_code
-            },
-            {
-              path: `${STARLINK}.hardware`,
-              value: response.dish_get_status.device_info.hardware_version
-            },
-            {
-              path: `${STARLINK}.software`,
-              value: response.dish_get_status.device_info.software_version
-            },
-            {
-              path: `${STARLINK}.alerts`,
-              value: response.dish_get_status.alerts
-            }
-          ];
-	} else {
-          if (dishyStatus != "online") {
-            app.setPluginStatus('Starlink is online');
-            dishyStatus = "online";
           }
-          values = [
-            {
-              path: `${STARLINK}.status`,
-              value: 'online'
-            },
-            {
-              path: `${STARLINK}.uptime`,
-              value: response.dish_get_status.device_state.uptime_s
-            },
-            {
-              path: `${STARLINK}.country_code`,
-              value: response.dish_get_status.device_info.country_code
-            },
-            {
-              path: `${STARLINK}.hardware`,
-              value: response.dish_get_status.device_info.hardware_version
-            },
-            {
-              path: `${STARLINK}.software`,
-              value: response.dish_get_status.device_info.software_version
-            },
-            {
-              path: `${STARLINK}.downlink_throughput`,
-              value: response.dish_get_status.downlink_throughput_bps || 0
-            },
-            {
-              path: `${STARLINK}.uplink_throughput`,
-              value: response.dish_get_status.uplink_throughput_bps || 0
-            },
-            {
-              path: `${STARLINK}.latency`,
-              value: response.dish_get_status.pop_ping_latency_ms
-            },
-            {
-              path: `${STARLINK}.alerts`,
-              value: response.dish_get_status.alerts
-            }
-          ];
+          return;
         }
+
+        errorCount = 0;
+        let values = [];
+
+        // Determine status: offline or online
+        let currentStatus;
+        if (response.dish_get_status.outage) {
+          currentStatus = 'offline';
+        } else {
+          currentStatus = 'online';
+        }
+
+        // Add status value
+        values.push({
+          path: `${STARLINK}.status`,
+          value: currentStatus
+        });
+
+        // Add country code value
+        if (response.dish_get_status && response.dish_get_status.device_state && response.dish_get_status.device_info.country_code) {
+          const currentCountryCode = response.dish_get_status.device_info.country_code;
+          values.push({
+            path: `${STARLINK}.country_code`,
+            value: currentCountryCode
+          });
+
+          // Handle country code change notification
+          handleCountryCodeChange(app, options, currentCountryCode);
+        }
+
+        // Send all values to SignalK
         app.handleMessage('signalk-starlink', {
           updates: [{
-              values: values
+            values: values
           }]
         });
 
-        if ( options.enableStatusNotification === undefined || options.enableStatusNotification === true ) {
-          const path = `notifications.${STARLINK}.state`
-          let state = dishyStatus !== 'online'
-              ? options.statusNotificationState || 'warn'
-              : 'normal'
-          
-          let method = ['visual', 'sound']
-          const existing = app.getSelfPath(path)
-          if (existing && existing.state !== 'normal' && existing.method ) {
-            method = existing.method
-          }
-          const status = dishyStatus === 'online' ? 'online' : 'offline'
-          app.handleMessage('signalk-starlink', {
-            updates: [{
-              values: [{
-                path, 
-                value: {
-                  state,
-                  method,
-                  message: `starlink is ${status}`
-                }   
+        // Handle status change notification
+        if (options.enableStatusNotification !== false) {
+          if (currentStatus !== dishyStatus) {
+            const notificationPath = `notifications.${STARLINK}.status`;
+            const state = currentStatus === 'offline'
+              ? (options.statusNotificationState || 'warn')
+              : 'normal';
+            const message = `Starlink is ${currentStatus}`;
+
+            app.handleMessage('signalk-starlink', {
+              updates: [{
+                values: [{
+                  path: notificationPath,
+                  value: {
+                    state: state,
+                    method: ['visual', 'sound'],
+                    message: message
+                  }
+                }]
               }]
-            }]
-          })
+            });
+
+            app.setPluginStatus(`Starlink is ${currentStatus}`);
+            dishyStatus = currentStatus;
+          }
         }
       });
     }, POLL_STARLINK_INTERVAL * 1000);
   }
 
-  plugin.stop =  function() {
+  plugin.stop = function() {
     clearInterval(pollProcess);
-    app.setPluginStatus('Pluggin stopped');
+    app.setPluginStatus('Plugin stopped');
   };
 
-  function stowDishy() {
-    client.Handle({
-      'dish_stow': {}
-    }, (error, response) => {
-      if (!error) {
-        stowRequested = true;
-      }
-    });
-  }
-
-  function unstowDishy() {
-    client.Handle({
-      'dish_stow': {
-        unstow: true
-      }
-    }, (error, response) => {
-      if (!error) {
-        stowRequested = false;
-      }
-    });
-  }
-
-  function calculateDistance(lat1, lon1, lat2, lon2) {
-    if ((lat1 == lat2) && (lon1 == lon2)) {
-      return 0;
+  function handleCountryCodeChange(app, options, currentCountryCode) {
+    if (previousCountryCode === undefined) {
+      // First time reading country code, just store it
+      previousCountryCode = currentCountryCode;
+      app.debug(`Country code initialized to: ${currentCountryCode}`);
+      return;
     }
-    else {
-      var radlat1 = Math.PI * lat1/180;
-      var radlat2 = Math.PI * lat2/180;
-      var theta = lon1-lon2;
-      var radtheta = Math.PI * theta/180;
-      var dist = Math.sin(radlat1) * Math.sin(radlat2) + Math.cos(radlat1) * Math.cos(radlat2) * Math.cos(radtheta);
-      if (dist > 1) {
-          dist = 1;
-      }
-      dist = Math.acos(dist);
-      dist = dist * 180/Math.PI;
-      dist = dist * 60 * 1.1515;
-      dist = dist * 0.8684; // Convert to Nautical miles
-      return dist;
-    }
-  }
 
-  function processDelta(options, data) {
-    let source = data.updates[0]['$source'];
-    let dict = data.updates[0].values[0];
-    let path = dict.path;
-    let value = dict.value;
+    // Check if there's a change involving XZ country code
+    const wasInXZ = previousCountryCode === 'XZ';
+    const isNowInXZ = currentCountryCode === 'XZ';
+    const hasCountryCodeChanged = previousCountryCode !== currentCountryCode;
 
-    switch (path) {
-      case 'navigation.position':
-        if (!gpsSource) {
-          gpsSource = source;
-          app.debug(`Setting GPS source to ${source}.`);
-        } else if (gpsSource != source) {
-          app.debug(`Ignoring position from ${source}.`);
-          break;
-        }
-        positions.unshift({
-          latitude: value.latitude,
-          longitude: value.longitude
-	      });
-        positions = positions.slice(0, 10);         // Keep 10 minutes of positions
-        if (positions.length < 10) {
-          app.debug(`Not enough position reports yet (${positions.length}) to calculate distance.`);
-          break;
-        }
-        let distance = 0;
-        for (let i=1;i < positions.length;i++) {
-          let previousPosition = positions[i-1];
-          let position = positions[i];
-          distance = distance + calculateDistance(position.latitude,
-                      position.longitude,
-                      previousPosition.latitude,
-                      previousPosition.longitude);
-        }
-        app.debug (`Distance covered in the last 10 minutes is ${distance} miles.`);
-        if (options.stowWhileMoving && (distance >= 0.15)) {
-          if (dishyStatus == "online") {
-            app.debug (`Vessel is moving, stowing Dishy.`);
-            stowDishy();
-          } else {
-            app.debug(`Vessel is moving but Dishy is not online.`);
-          }
+    if (hasCountryCodeChanged && (wasInXZ || isNowInXZ)) {
+      // Country code changed between XZ and something else
+      const fromCountry = previousCountryCode;
+      const toCountry = currentCountryCode;
+
+      app.debug(`Country code changed from ${fromCountry} to ${toCountry}`);
+
+      if (options.enableCountryCodeNotification !== false) {
+        const notificationPath = `notifications.${STARLINK}.country_code_change`;
+        const state = options.countryCodeNotificationState || 'warn';
+        
+        // Build message based on direction of change
+        let message;
+        if (isNowInXZ) {
+          // Changed TO XZ
+          message = `Starlink country code changed from ${fromCountry} to ${toCountry}. Enable Ocean Mode`;
         } else {
-          if (dishyStatus == "online") {
-            app.debug (`Vessel is stationary, and dishy is not stowed.`);
-          } else if (dishyStatus == "STOWED") {
-            if (stowRequested) {
-              app.debug (`Vessel is stationary, and we previously stowed Dishy. Unstowing.`);
-              unstowDishy();
-            } else {
-              app.debug (`Vessel is stationary, and Dishy is stowed, but not by us. Ignoring.`);
-            }
-          }
-        }	  
-        break;
-      case 'environment.wind.speedApparent':
-        break;
-      default:
-        app.error('Unknown path: ' + path);
-    }
-  }
+          // Changed FROM XZ
+          message = `Starlink country code changed from ${fromCountry} to ${toCountry}. DISABLE Ocean Mode!`;
+        }
 
-  function timeSince(seconds) {
-    var interval = seconds / 31536000;
-    if (interval > 1) {
-      return Math.floor(interval) + " years";
-    }
-    interval = seconds / 2592000;
-    if (interval > 1) {
-      return Math.floor(interval) + " months";
-    }
-    interval = seconds / 86400;
-    if (interval > 1) {
-      return Math.floor(interval) + " days";
-    }
-    interval = seconds / 3600;
-    if (interval > 1) {
-      return Math.floor(interval) + " hours";
-    }
-    interval = seconds / 60;
-    if (interval > 1) {
-      return Math.floor(interval) + " minutes";
-    }
-    return Math.floor(seconds) + " seconds";
-  }
+        app.handleMessage('signalk-starlink', {
+          updates: [{
+            values: [{
+              path: notificationPath,
+              value: {
+                state: state,
+                method: ['visual', 'sound'],
+                message: message
+              }
+            }]
+          }]
+        });
 
+        app.setPluginStatus(`Country code change detected: ${fromCountry} -> ${toCountry}`);
+      }
+    }
 
-  function haversine(lat1, lon1, lat2, lon2) {
-    const earthRadius = 6371e3; // Radius of the Earth in meters
-    // Convert latitude and longitude from degrees to radians
-    const lat1Rad = lat1 * Math.PI / 180;
-    const lon1Rad = lon1 * Math.PI / 180;
-    const lat2Rad = lat2 * Math.PI / 180;
-    const lon2Rad = lon2 * Math.PI / 180;
-    // Haversine formula
-    const dLat = lat2Rad - lat1Rad;
-    const dLon = lon2Rad - lon1Rad;
-    const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(lat1Rad) * Math.cos(lat2Rad) * Math.sin(dLon/2) * Math.sin(dLon/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    const distance = earthRadius * c; // Distance in meters
-    return distance;
-  }
-
-  function calculateCourseAndSpeed(lat1, lon1, lat2, lon2) {
-    // Calculate distance between the two points
-    const distance = haversine(lat1, lon1, lat2, lon2);
-    // Calculate speed over ground (SOG) in meters per second
-    const speed = distance / POLL_STARLINK_INTERVAL;
-    // Calculate course over ground (COG) in radians
-    const angle = Math.atan2(lon2 - lon1, lat2 - lat1);
-    const course = angle < 0 ? angle + 2 * Math.PI : angle;
-    return { course, speed };
+    previousCountryCode = currentCountryCode;
   }
 
   return plugin;
