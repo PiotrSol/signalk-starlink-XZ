@@ -10,7 +10,7 @@ Ocean Mode keeps billing per GB until it is switched off by hand, including afte
 
 ## Why the country code matters
 
-Starlink reports the country it is in as an ISO 3166 code. Beyond 12 nautical miles from shore it reports `XZ`, and service there needs Ocean Mode on the Roam Unlimited and Personal Maritime plans. Ocean Mode is billed per GB on top of the monthly plan: currently **US$6 per GB** (November 2026; it rose from US$2 on 27/09/2026). Prices change and differ by plan and region, so check yours on starlink.com.
+Starlink reports the country it is in as an ISO 3166 code. Beyond 12 nautical miles from shore it reports `XZ`, and service there needs Ocean Mode on the Roam Unlimited and Personal Maritime plans. Ocean Mode is billed per GB on top of the monthly plan: currently **6USD per GB** (November 2026; it rose from 2USD on 27/09/2026). Prices change and differ by plan and region, so check yours on starlink.com.
 
 At that rate a single 4K film or a large software update can cost tens of dollars. The reminder on leaving `XZ` is the one that saves money.
 
