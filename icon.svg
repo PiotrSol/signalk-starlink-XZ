@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <title>Starlink XZ: Ocean Mode reminder</title>
+  <defs><clipPath id="tile"><rect width="128" height="128" rx="25"/></clipPath></defs>
+  <g clip-path="url(#tile)">
+    <!-- sea -->
+    <rect width="128" height="128" fill="#cfe3ea"/>
+    <!-- coast on the left -->
+    <path d="M0 0H22C30 18 18 34 26 52S20 86 28 104 22 122 26 128H0Z" fill="#e8dcb5"/>
+    <!-- the 12 nm line: territorial waters end here -->
+    <path d="M44 0C52 18 40 34 48 52S42 86 50 104 44 122 48 128" fill="none" stroke="#b0287a" stroke-width="3.5" stroke-dasharray="7 6" stroke-linecap="round"/>
+  </g>
+  <text x="55" y="123" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="700" fill="#b0287a">12 nm</text>
+  <!-- signal from the satellites -->
+  <path d="M104 10a14 14 0 0 1 12 12" fill="none" stroke="#1d6fa5" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M101 2a24 24 0 0 1 22 22" fill="none" stroke="#1d6fa5" stroke-width="3.5" stroke-linecap="round"/>
+  <!-- flat-panel satellite antenna on a mast -->
+  <path d="M88 40V64" stroke="#15191c" stroke-width="5" stroke-linecap="round"/>
+  <g transform="translate(88 32) rotate(-35)">
+    <rect x="-19" y="-11" width="38" height="22" rx="4" fill="#fbfcfa" stroke="#15191c" stroke-width="4"/>
+  </g>
+  <!-- international waters -->
+  <text x="60" y="92" font-family="Arial, Helvetica, sans-serif" font-size="25" font-weight="800" fill="#15191c">XZ</text>
+  <!-- paid data -->
+  <circle cx="104" cy="104" r="14" fill="#b0287a"/>
+  <text x="104" y="112" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="21" font-weight="800" fill="#ffffff">$</text>
+</svg>

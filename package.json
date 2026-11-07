@@ -1,27 +1,52 @@
 {
-  "name": "signalk-starlink",
-  "version": "1.1.0",
-  "description": "Starlink plugin for Signal K",
+  "name": "signalk-starlink-xz",
+  "version": "1.0.0",
+  "description": "Signal K plugin that reminds you to switch off paid Starlink Ocean Mode when back in territorial waters (country code leaves XZ), and to switch it on beyond 12 nm; also notifies when Starlink goes offline",
   "main": "index.js",
   "signalk-plugin-enabled-by-default": true,
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/itemir/signalk-starlink.git"
+    "url": "git+https://github.com/PiotrSol/signalk-starlink-XZ.git"
   },
   "keywords": [
-    "signalk-node-server-plugin"
+    "signalk-node-server-plugin",
+    "signalk-category-hardware",
+    "starlink",
+    "ocean-mode",
+    "priority",
+    "xz",
+    "territorial-waters"
   ],
-  "author": "Ilker Temir",
+  "author": "Piotr <piotr.pingo@gmail.com>",
+  "contributors": [
+    "Ilker Temir <ilker@ilkertemir.com> (original signalk-starlink)",
+    "Scott Bender (offline notification)"
+  ],
   "license": "Apache-2.0",
   "bugs": {
-    "url": "https://github.com/itemir/signalk-starlink/issues"
+    "url": "https://github.com/PiotrSol/signalk-starlink-XZ/issues"
   },
-  "homepage": "https://github.com/itemir/signalk-starlink#readme",
+  "homepage": "https://github.com/PiotrSol/signalk-starlink-XZ#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "index.js",
+    "protos/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "icon.svg"
+  ],
   "dependencies": {
-    "@grpc/grpc-js": "^1.6.3",
-    "@grpc/proto-loader": "^0.6.9"
+    "@grpc/grpc-js": "1.14.6",
+    "@grpc/proto-loader": "0.8.1"
+  },
+  "signalk": {
+    "displayName": "Starlink XZ: Ocean Mode reminder",
+    "appIcon": "./icon.svg"
   }
 }

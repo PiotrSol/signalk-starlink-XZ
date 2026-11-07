@@ -1,6 +1,7 @@
 /*
  * Copyright 2022-2024 Ilker Temir <ilker@ilkertemir.com>
- * 
+ * Copyright 2026 Piotr (github.com/PiotrSol)
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -11,218 +12,319 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified in 2026 by Piotr from Ilker Temir's signalk-starlink
+ * (github.com/itemir/signalk-starlink): country code (XZ) notification,
+ * outage cause in the offline notification, configurable dish address and
+ * polling interval, call deadline, polls that never overlap, state reset
+ * on every start, the auto-stow and dish GNSS features removed.
  */
 
-const POLL_STARLINK_INTERVAL = 60     // Poll every 60 seconds
+'use strict'
+
+const path = require('path')
+const protoLoader = require('@grpc/proto-loader')
+const grpc = require('@grpc/grpc-js')
+
+const PLUGIN_ID = 'signalk-starlink-xz'
 const STARLINK = 'network.providers.starlink'
-
-const path = require('path');
-const protoLoader = require('@grpc/proto-loader');
-const grpc = require('@grpc/grpc-js');
-const gRpcOptions = {
-    keepCase: true,
-    longs: String,
-    enums: String,
-    defaults: true,
-    oneofs: true,
-    includeDirs: [path.join(__dirname, '/protos')]
+const INTERNATIONAL_WATERS = 'XZ'
+const ERRORS_BEFORE_RECONNECT = 5
+const STATES = ['alert', 'warn', 'alarm', 'emergency']
+const DEFAULTS = {
+  address: '192.168.100.1:9200',
+  pollInterval: 60,
+  callTimeout: 10
 }
-const packageDefinition = protoLoader.loadSync('spacex/api/device/service.proto', gRpcOptions);
-const Device  = grpc.loadPackageDefinition(packageDefinition).SpaceX.API.Device.Device;
-var client = new Device(
-    "192.168.100.1:9200",
-    grpc.credentials.createInsecure()
-);
 
-var dishyStatus;
-var errorCount = 0;
-var previousCountryCode;
+// The gRPC service definition is parsed once, on first use.
+let DeviceService = null
+function deviceService () {
+  if (!DeviceService) {
+    const definition = protoLoader.loadSync('spacex/api/device/service.proto', {
+      keepCase: true,
+      longs: String,
+      enums: String,
+      defaults: true,
+      oneofs: true,
+      includeDirs: [path.join(__dirname, 'protos')]
+    })
+    DeviceService = grpc.loadPackageDefinition(definition).SpaceX.API.Device.Device
+  }
+  return DeviceService
+}
 
-module.exports = function(app) {
-  var plugin = {};
-  var unsubscribes = [];
-  var pollProcess;
+function defaultCreateClient (address) {
+  const Device = deviceService()
+  return new Device(address, grpc.credentials.createInsecure())
+}
 
-  plugin.id = "signalk-starlink";
-  plugin.name = "Starlink";
-  plugin.description = "Starlink plugin for Signal K";
+/** Seconds from a nanosecond count (a string, as gRPC int64 arrives), or null. */
+function nsToSeconds (ns) {
+  const n = Number(ns)
+  return Number.isFinite(n) && n >= 0 ? n / 1e9 : null
+}
+
+/** ISO date from a nanosecond Unix timestamp, or null. */
+function nsToIso (ns) {
+  const n = Number(ns)
+  return Number.isFinite(n) && n > 0 ? new Date(n / 1e6).toISOString() : null
+}
+
+/**
+ * What the plugin needs from a get_status response:
+ * { online, countryCode, outage: { cause, start, duration } | null }, or
+ * null when the response holds no dish status. Every field is checked, so
+ * a dish that leaves one out never throws.
+ */
+function readStatus (response) {
+  const status = response && response.dish_get_status
+  if (!status) return null
+  const outage = status.outage || null
+  const info = status.device_info || {}
+  return {
+    online: !outage,
+    countryCode: typeof info.country_code === 'string' && info.country_code ? info.country_code : null,
+    outage: outage
+      ? {
+          cause: outage.cause || 'UNKNOWN',
+          start: nsToIso(outage.start_timestamp_ns),
+          duration: nsToSeconds(outage.duration_ns)
+        }
+      : null
+  }
+}
+
+/**
+ * The message for a country code change into or out of international waters
+ * (XZ), or null for any other change, or none.
+ */
+function countryChangeMessage (previous, current) {
+  if (!previous || !current || previous === current) return null
+  if (current === INTERNATIONAL_WATERS) {
+    return `Starlink country code changed from ${previous} to ${current} (international waters). Enable Ocean Mode`
+  }
+  if (previous === INTERNATIONAL_WATERS) {
+    return `Starlink country code changed from ${previous} to ${current} (territorial waters). DISABLE Ocean Mode!`
+  }
+  return null
+}
+
+function notification (state, message) {
+  return { state, method: state === 'normal' ? [] : ['visual', 'sound'], message }
+}
+
+function formatDuration (seconds) {
+  if (seconds === null) return 'unknown time'
+  const s = Math.round(seconds)
+  if (s < 60) return `${s} s`
+  if (s < 3600) return `${Math.floor(s / 60)} min`
+  return `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`
+}
+
+module.exports = function (app, { createClient = defaultCreateClient } = {}) {
+  const plugin = {
+    id: PLUGIN_ID,
+    name: 'Starlink XZ: Ocean Mode reminder',
+    description: 'Reminds you to switch off paid Starlink Ocean Mode when back in territorial waters (country code leaves XZ), and to switch it on when entering international waters; also notifies when Starlink goes offline'
+  }
+
+  // Everything the plugin remembers lives here and is created anew by
+  // every start(), so that a restart from the admin UI begins cleanly.
+  let run = null
 
   plugin.schema = {
     type: 'object',
-    required: [],
     properties: {
+      address: {
+        type: 'string',
+        title: 'Dish address',
+        description: 'gRPC address of the Starlink dish (host:port)',
+        default: DEFAULTS.address
+      },
+      pollInterval: {
+        type: 'number',
+        title: 'Polling interval (s)',
+        default: DEFAULTS.pollInterval,
+        minimum: 5
+      },
       enableStatusNotification: {
-        type: "boolean",
-        title: "Send a notification when offline",
+        type: 'boolean',
+        title: 'Send a notification when Starlink goes offline',
         default: true
       },
       statusNotificationState: {
-        title: 'Status Notification State',
-        description:
-          'Notification state when Starlink goes offline',
         type: 'string',
+        title: 'Offline notification state',
         default: 'warn',
-        enum: ['alert', 'warn', 'alarm', 'emergency']
+        enum: STATES
       },
       enableCountryCodeNotification: {
-        type: "boolean",
-        title: "Send a notification when country code changes between International Waters (XZ - Requires Ocean Mode paid data) and Territorial Waters - ISO3166 Country Code",
+        type: 'boolean',
+        title: 'Send a notification when the country code changes into or out of international waters (XZ)',
+        description: 'XZ is reported in international waters, where Starlink service needs Ocean Mode (paid). Changes between two ISO 3166 countries do not notify.',
         default: true
       },
       countryCodeNotificationState: {
-        title: 'Country Code Change State',
-        description:
-          'Notification state when country code changes between XZ and other countries',
         type: 'string',
+        title: 'Country code notification state',
         default: 'warn',
-        enum: ['alert', 'warn', 'alarm', 'emergency']
+        enum: STATES
+      },
+      countryCodeNotificationClearMinutes: {
+        type: 'number',
+        title: 'Clear the country code notification after (min)',
+        description: '0 keeps it until the next change, so that the crew acts on it',
+        default: 0,
+        minimum: 0
       }
     }
   }
 
-  plugin.start = function(options) {
-    pollProcess = setInterval(function() {
-      client.Handle({
-        'get_status': {}
-      }, (error, response) => {
-        if (error) {
-          app.debug(`Error reading from Dishy.`);
-          if (errorCount++ >= 5) {
-            client.close();
-            client = new Device(
-              "192.168.100.1:9200",
-              grpc.credentials.createInsecure()
-            );
-            errorCount = 0;
-            app.debug(`Retrying connection`);
-          }
-          return;
-        }
+  function send (values) {
+    if (values.length) app.handleMessage(PLUGIN_ID, { updates: [{ values }] })
+  }
 
-        errorCount = 0;
-        let values = [];
+  function statusLine (s) {
+    const where = s.countryCode ? `, country ${s.countryCode}` : ''
+    if (s.online) return `Starlink is online${where}`
+    return `Starlink has been offline (${s.outage.cause}) for ${formatDuration(s.outage.duration)}${where}`
+  }
 
-        // Determine status: offline or online
-        let currentStatus;
-        if (response.dish_get_status.outage) {
-          currentStatus = 'offline';
-        } else {
-          currentStatus = 'online';
-        }
+  /** Turns one dish status into Signal K values and notifications. */
+  function publish (r, s) {
+    const values = [{ path: `${STARLINK}.status`, value: s.online ? 'online' : 'offline' }]
 
-        // Add status value
-        values.push({
-          path: `${STARLINK}.status`,
-          value: currentStatus
-        });
+    if (s.outage) {
+      values.push(
+        { path: `${STARLINK}.outage.cause`, value: s.outage.cause },
+        { path: `${STARLINK}.outage.start`, value: s.outage.start },
+        { path: `${STARLINK}.outage.duration`, value: s.outage.duration }
+      )
+    } else if (r.lastOnline === false) {
+      // Back online: the outage values no longer describe anything.
+      values.push(
+        { path: `${STARLINK}.outage.cause`, value: null },
+        { path: `${STARLINK}.outage.start`, value: null },
+        { path: `${STARLINK}.outage.duration`, value: null }
+      )
+    }
 
-        // Add country code value
-        if (response.dish_get_status && response.dish_get_status.device_state && response.dish_get_status.device_info.country_code) {
-          const currentCountryCode = response.dish_get_status.device_info.country_code;
+    if (s.countryCode) values.push({ path: `${STARLINK}.country_code`, value: s.countryCode })
+
+    // Offline notification: on going offline or online, and when the cause
+    // of an outage changes, for example from NO_SATS to OBSTRUCTED.
+    const cause = s.outage ? s.outage.cause : null
+    if (r.options.enableStatusNotification !== false && (s.online !== r.lastOnline || cause !== r.lastCause)) {
+      values.push({
+        path: `notifications.${STARLINK}.status`,
+        value: s.online
+          ? notification('normal', 'Starlink is online')
+          : notification(r.options.statusNotificationState || 'warn', `Starlink is offline: ${cause}`)
+      })
+    }
+
+    // Country code notification, only on a change into or out of XZ.
+    if (s.countryCode) {
+      const message = countryChangeMessage(r.lastCountryCode, s.countryCode)
+      if (message) {
+        app.debug(message)
+        if (r.options.enableCountryCodeNotification !== false) {
           values.push({
-            path: `${STARLINK}.country_code`,
-            value: currentCountryCode
-          });
-
-          // Handle country code change notification
-          handleCountryCodeChange(app, options, currentCountryCode);
+            path: `notifications.${STARLINK}.country_code_change`,
+            value: notification(r.options.countryCodeNotificationState || 'warn', message)
+          })
+          scheduleCountryClear(r)
         }
-
-        // Send all values to SignalK
-        app.handleMessage('signalk-starlink', {
-          updates: [{
-            values: values
-          }]
-        });
-
-        // Handle status change notification
-        if (options.enableStatusNotification !== false) {
-          if (currentStatus !== dishyStatus) {
-            const notificationPath = `notifications.${STARLINK}.status`;
-            const state = currentStatus === 'offline'
-              ? (options.statusNotificationState || 'warn')
-              : 'normal';
-            const message = `Starlink is ${currentStatus}`;
-
-            app.handleMessage('signalk-starlink', {
-              updates: [{
-                values: [{
-                  path: notificationPath,
-                  value: {
-                    state: state,
-                    method: ['visual', 'sound'],
-                    message: message
-                  }
-                }]
-              }]
-            });
-
-            app.setPluginStatus(`Starlink is ${currentStatus}`);
-            dishyStatus = currentStatus;
-          }
-        }
-      });
-    }, POLL_STARLINK_INTERVAL * 1000);
-  }
-
-  plugin.stop = function() {
-    clearInterval(pollProcess);
-    app.setPluginStatus('Plugin stopped');
-  };
-
-  function handleCountryCodeChange(app, options, currentCountryCode) {
-    if (previousCountryCode === undefined) {
-      // First time reading country code, just store it
-      previousCountryCode = currentCountryCode;
-      app.debug(`Country code initialized to: ${currentCountryCode}`);
-      return;
-    }
-
-    // Check if there's a change involving XZ country code
-    const wasInXZ = previousCountryCode === 'XZ';
-    const isNowInXZ = currentCountryCode === 'XZ';
-    const hasCountryCodeChanged = previousCountryCode !== currentCountryCode;
-
-    if (hasCountryCodeChanged && (wasInXZ || isNowInXZ)) {
-      // Country code changed between XZ and something else
-      const fromCountry = previousCountryCode;
-      const toCountry = currentCountryCode;
-
-      app.debug(`Country code changed from ${fromCountry} to ${toCountry}`);
-
-      if (options.enableCountryCodeNotification !== false) {
-        const notificationPath = `notifications.${STARLINK}.country_code_change`;
-        const state = options.countryCodeNotificationState || 'warn';
-        
-        // Build message based on direction of change
-        let message;
-        if (isNowInXZ) {
-          // Changed TO XZ
-          message = `Starlink country code changed from ${fromCountry} to ${toCountry}. Enable Ocean Mode`;
-        } else {
-          // Changed FROM XZ
-          message = `Starlink country code changed from ${fromCountry} to ${toCountry}. DISABLE Ocean Mode!`;
-        }
-
-        app.handleMessage('signalk-starlink', {
-          updates: [{
-            values: [{
-              path: notificationPath,
-              value: {
-                state: state,
-                method: ['visual', 'sound'],
-                message: message
-              }
-            }]
-          }]
-        });
-
-        app.setPluginStatus(`Country code change detected: ${fromCountry} -> ${toCountry}`);
       }
+      r.lastCountryCode = s.countryCode
     }
 
-    previousCountryCode = currentCountryCode;
+    send(values)
+    app.setPluginStatus(statusLine(s))
+    r.lastOnline = s.online
+    r.lastCause = cause
   }
 
-  return plugin;
+  function scheduleCountryClear (r) {
+    const minutes = Number(r.options.countryCodeNotificationClearMinutes) || 0
+    if (r.clearTimer) clearTimeout(r.clearTimer)
+    r.clearTimer = null
+    if (minutes <= 0) return
+    r.clearTimer = setTimeout(() => {
+      r.clearTimer = null
+      if (r.stopped) return
+      send([{ path: `notifications.${STARLINK}.country_code_change`, value: notification('normal', `Starlink country code is ${r.lastCountryCode}`) }])
+    }, minutes * 60000)
+  }
+
+  function reconnect (r) {
+    try { r.client.close() } catch (e) { /* already closed */ }
+    r.client = createClient(r.address)
+    app.debug(`Reconnecting to Starlink at ${r.address}`)
+  }
+
+  // Polls run one after another: the next is scheduled only when the dish
+  // has answered or the call has timed out, so slow answers never pile up.
+  function poll (r) {
+    if (r.stopped) return
+    const deadline = new Date(Date.now() + r.callTimeout * 1000)
+    r.client.Handle({ get_status: {} }, { deadline }, (error, response) => {
+      if (r.stopped) return
+      const s = error ? null : readStatus(response)
+      if (!s) {
+        r.errorCount++
+        app.debug(`No status from Starlink at ${r.address}: ${error ? error.message : 'empty response'}`)
+        if (r.errorCount === ERRORS_BEFORE_RECONNECT) {
+          if (app.setPluginError) app.setPluginError(`Cannot reach Starlink at ${r.address}`)
+          reconnect(r)
+          r.errorCount = 0
+        }
+      } else {
+        r.errorCount = 0
+        publish(r, s)
+      }
+      r.timer = setTimeout(() => poll(r), r.pollInterval * 1000)
+    })
+  }
+
+  plugin.start = function (options = {}) {
+    const pollInterval = Number(options.pollInterval) >= 5 ? Number(options.pollInterval) : DEFAULTS.pollInterval
+    run = {
+      options,
+      address: options.address || DEFAULTS.address,
+      pollInterval,
+      // A call never waits longer than the polling interval.
+      callTimeout: Math.min(DEFAULTS.callTimeout, pollInterval),
+      client: null,
+      timer: null,
+      clearTimer: null,
+      errorCount: 0,
+      lastOnline: undefined,
+      lastCause: undefined,
+      lastCountryCode: undefined,
+      stopped: false
+    }
+    run.client = createClient(run.address)
+    app.handleMessage(PLUGIN_ID, { updates: [{ meta: [{ path: `${STARLINK}.outage.duration`, value: { units: 's', description: 'Duration of the current Starlink outage' } }] }] })
+    app.setPluginStatus(`Connecting to Starlink at ${run.address}`)
+    poll(run) // first poll at once, not after a full interval
+  }
+
+  plugin.stop = function () {
+    if (!run) return
+    run.stopped = true
+    clearTimeout(run.timer)
+    clearTimeout(run.clearTimer)
+    try { run.client.close() } catch (e) { /* already closed */ }
+    run = null
+    app.setPluginStatus('Plugin stopped')
+  }
+
+  return plugin
 }
+
+// Exposed for the tests.
+module.exports.readStatus = readStatus
+module.exports.countryChangeMessage = countryChangeMessage
+module.exports.formatDuration = formatDuration
