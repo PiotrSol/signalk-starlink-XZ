@@ -17,7 +17,8 @@
  * (github.com/itemir/signalk-starlink): country code (XZ) notification,
  * outage cause in the offline notification, configurable dish address and
  * polling interval, call deadline, polls that never overlap, state reset
- * on every start, the auto-stow and dish GNSS features removed.
+ * on every start, unexpected location alert, the auto-stow and dish GNSS
+ * features removed.
  */
 
 'use strict'
@@ -73,7 +74,7 @@ function nsToIso (ns) {
 
 /**
  * What the plugin needs from a get_status response:
- * { online, countryCode, outage: { cause, start, duration } | null }, or
+ * { online, countryCode, unexpectedLocation, outage: { cause, start, duration } | null }, or
  * null when the response holds no dish status. Every field is checked, so
  * a dish that leaves one out never throws.
  */
@@ -82,9 +83,11 @@ function readStatus (response) {
   if (!status) return null
   const outage = status.outage || null
   const info = status.device_info || {}
+  const alerts = status.alerts || {}
   return {
     online: !outage,
     countryCode: typeof info.country_code === 'string' && info.country_code ? info.country_code : null,
+    unexpectedLocation: alerts.unexpected_location === true,
     outage: outage
       ? {
           cause: outage.cause || 'UNKNOWN',
@@ -171,6 +174,18 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
         default: 'warn',
         enum: STATES
       },
+      enableUnexpectedLocationNotification: {
+        type: 'boolean',
+        title: 'Send a notification when the dish reports an unexpected location',
+        description: 'The dish raises this alert when it is somewhere its service plan does not currently cover',
+        default: true
+      },
+      unexpectedLocationNotificationState: {
+        type: 'string',
+        title: 'Unexpected location notification state',
+        default: 'warn',
+        enum: STATES
+      },
       countryCodeNotificationClearMinutes: {
         type: 'number',
         title: 'Clear the country code notification after (min)',
@@ -186,7 +201,7 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
   }
 
   function statusLine (s) {
-    const where = s.countryCode ? `, country ${s.countryCode}` : ''
+    const where = (s.countryCode ? `, country ${s.countryCode}` : '') + (s.unexpectedLocation ? ', unexpected location' : '')
     if (s.online) return `Starlink is online${where}`
     return `Starlink has been offline (${s.outage.cause}) for ${formatDuration(s.outage.duration)}${where}`
   }
@@ -211,6 +226,20 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
     }
 
     if (s.countryCode) values.push({ path: `${STARLINK}.country_code`, value: s.countryCode })
+    values.push({ path: `${STARLINK}.alerts.unexpected_location`, value: s.unexpectedLocation })
+
+    // Unexpected location: notify when the alert turns on, clear when it
+    // turns off; nothing at start while it is off.
+    if (r.options.enableUnexpectedLocationNotification !== false && s.unexpectedLocation !== r.lastUnexpectedLocation &&
+        (s.unexpectedLocation || r.lastUnexpectedLocation !== undefined)) {
+      values.push({
+        path: `notifications.${STARLINK}.unexpected_location`,
+        value: s.unexpectedLocation
+          ? notification(r.options.unexpectedLocationNotificationState || 'warn', 'Starlink reports an unexpected location: check that your plan covers this area')
+          : notification('normal', 'Starlink location is covered by the plan')
+      })
+    }
+    r.lastUnexpectedLocation = s.unexpectedLocation
 
     // Offline notification: on going offline or online, and when the cause
     // of an outage changes, for example from NO_SATS to OBSTRUCTED.
@@ -303,6 +332,7 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
       lastOnline: undefined,
       lastCause: undefined,
       lastCountryCode: undefined,
+      lastUnexpectedLocation: undefined,
       stopped: false
     }
     run.client = createClient(run.address)

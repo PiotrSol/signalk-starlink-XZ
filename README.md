@@ -6,6 +6,7 @@ Ocean Mode keeps billing per GB until it is switched off by hand, including afte
 
 - when the country code **leaves `XZ`** (back inside 12 nm of a coast): **switch Ocean Mode off**;
 - when it **becomes `XZ`** (international waters, beyond 12 nm): switch Ocean Mode on, or there is no service;
+- when the dish reports an **unexpected location** (somewhere its service plan does not currently cover);
 - when **Starlink goes offline**, naming the cause (for example `OBSTRUCTED` or `NO_SATS`), and when it comes back.
 
 ## Why the country code matters
@@ -24,6 +25,7 @@ Under `network.providers.starlink`:
 | :--- | :--- |
 | `status` | `online` or `offline` |
 | `country_code` | ISO 3166 country code, or `XZ` in international waters |
+| `alerts.unexpected_location` | `true` while the dish reports an unexpected location |
 | `outage.cause` | Reason for the outage, while offline (for example `OBSTRUCTED`, `NO_SATS`, `STOWED`, `BOOTING`) |
 | `outage.start` | Start of the outage, ISO date |
 | `outage.duration` | Duration of the outage so far, in seconds |
@@ -36,18 +38,21 @@ Notifications:
 | :--- | :--- |
 | `notifications.network.providers.starlink.status` | Starlink goes offline, the cause of an outage changes, or Starlink is back online (`normal`) |
 | `notifications.network.providers.starlink.country_code_change` | The country code changes into or out of `XZ` |
+| `notifications.network.providers.starlink.unexpected_location` | The dish's unexpected location alert turns on ("check that your plan covers this area"), and `normal` when it turns off |
 
 ## Settings
 
 | Setting | Default | Notes |
 | :--- | :--- | :--- |
-| Dish address | `192.168.100.1:9200` | The dish's local gRPC address |
+| Dish address | `192.168.100.1:9200` | The dish's local gRPC address. Behind another router, that router needs a route to `192.168.100.1` through the Starlink router |
 | Polling interval (s) | 60 | At least 5 |
 | Send a notification when Starlink goes offline | on | |
 | Offline notification state | `warn` | `alert`, `warn`, `alarm` or `emergency` |
 | Send a notification on a change into or out of XZ | on | |
 | Country code notification state | `warn` | |
 | Clear the country code notification after (min) | 0 | 0 keeps it until the next change, so that the crew acts on it |
+| Send a notification when the dish reports an unexpected location | on | |
+| Unexpected location notification state | `warn` | |
 
 ## How it works
 
