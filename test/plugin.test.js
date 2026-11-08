@@ -31,7 +31,7 @@ function fakeDish () {
   return dish
 }
 
-const online = (country) => ({ dish_get_status: { outage: null, device_info: { country_code: country } } })
+const online = (country, unexpected = false) => ({ dish_get_status: { outage: null, device_info: { country_code: country }, alerts: { unexpected_location: unexpected } } })
 const offline = (cause, country = 'ES') => ({
   dish_get_status: {
     outage: { cause, start_timestamp_ns: '1793900000000000000', duration_ns: '125000000000' },
@@ -64,7 +64,8 @@ function start (options = {}, dish = fakeDish()) {
 
 describe('readStatus', () => {
   it('reads an online dish', () => {
-    assert.deepEqual(readStatus(online('ES')), { online: true, countryCode: 'ES', outage: null })
+    assert.deepEqual(readStatus(online('ES')), { online: true, countryCode: 'ES', unexpectedLocation: false, outage: null })
+    assert.equal(readStatus(online('FR', true)).unexpectedLocation, true)
   })
 
   it('reads an outage with its cause, start and duration', () => {
@@ -78,7 +79,7 @@ describe('readStatus', () => {
   it('never throws on a response without status or device info', () => {
     assert.equal(readStatus(null), null)
     assert.equal(readStatus({}), null)
-    assert.deepEqual(readStatus({ dish_get_status: {} }), { online: true, countryCode: null, outage: null })
+    assert.deepEqual(readStatus({ dish_get_status: {} }), { online: true, countryCode: null, unexpectedLocation: false, outage: null })
     assert.equal(readStatus({ dish_get_status: { device_info: { country_code: '' } } }).countryCode, null)
   })
 })
@@ -207,6 +208,50 @@ describe('the plugin', () => {
     assert.equal(dish.clients, 2)
     assert.equal(dish.closed, 1)
     assert.match(app.error, /Cannot reach Starlink/)
+    plugin.stop()
+  })
+
+  it('publishes the unexpected location alert, shows it in the status line, and notifies when it turns on', () => {
+    const dish = fakeDish()
+    dish.queue.push(online('FR'), online('FR', true), online('FR', true), online('FR'))
+    const { app, plugin } = start({}, dish)
+    assert.equal(app.last(`${STARLINK}.alerts.unexpected_location`).value, false)
+    assert.equal(app.last(`notifications.${STARLINK}.unexpected_location`), undefined, 'nothing at start while off')
+    mock.timers.tick(60000)
+    const n = app.last(`notifications.${STARLINK}.unexpected_location`).value
+    assert.equal(n.state, 'warn')
+    assert.equal(n.message, 'Starlink reports an unexpected location: check that your plan covers this area')
+    assert.equal(app.last(`${STARLINK}.alerts.unexpected_location`).value, true)
+    assert.equal(app.status, 'Starlink is online, country FR, unexpected location')
+    const count = app.values.filter((v) => v.path.endsWith('.unexpected_location') && v.path.startsWith('notifications')).length
+    mock.timers.tick(60000)
+    assert.equal(app.values.filter((v) => v.path.endsWith('.unexpected_location') && v.path.startsWith('notifications')).length, count, 'no repeat while on')
+    mock.timers.tick(60000)
+    assert.equal(app.last(`notifications.${STARLINK}.unexpected_location`).value.state, 'normal')
+    assert.equal(app.status, 'Starlink is online, country FR')
+    plugin.stop()
+  })
+
+  it('notifies in international waters too, alongside the country code notification', () => {
+    const dish = fakeDish()
+    dish.queue.push(online('XZ', true))
+    const { app, plugin } = start({}, dish)
+    assert.equal(app.last(`notifications.${STARLINK}.unexpected_location`).value.state, 'warn')
+    assert.equal(app.status, 'Starlink is online, country XZ, unexpected location')
+    plugin.stop()
+  })
+
+  it('lets the unexpected location notification be switched off or given another state', () => {
+    let dish = fakeDish()
+    dish.queue.push(online('FR', true))
+    let { app, plugin } = start({ enableUnexpectedLocationNotification: false }, dish)
+    assert.equal(app.last(`notifications.${STARLINK}.unexpected_location`), undefined)
+    assert.equal(app.last(`${STARLINK}.alerts.unexpected_location`).value, true, 'the path is still published')
+    plugin.stop()
+    dish = fakeDish()
+    dish.queue.push(online('FR', true));
+    ({ app, plugin } = start({ unexpectedLocationNotificationState: 'alarm' }, dish))
+    assert.equal(app.last(`notifications.${STARLINK}.unexpected_location`).value.state, 'alarm')
     plugin.stop()
   })
 
