@@ -160,7 +160,7 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
         type: 'string',
         title: 'Offline notification state',
         default: 'warn',
-        enum: STATES
+        enum: [...STATES]
       },
       enableCountryCodeNotification: {
         type: 'boolean',
@@ -172,7 +172,7 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
         type: 'string',
         title: 'Country code notification state',
         default: 'warn',
-        enum: STATES
+        enum: [...STATES]
       },
       enableUnexpectedLocationNotification: {
         type: 'boolean',
@@ -184,7 +184,7 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
         type: 'string',
         title: 'Unexpected location notification state',
         default: 'warn',
-        enum: STATES
+        enum: [...STATES]
       },
       countryCodeNotificationClearMinutes: {
         type: 'number',

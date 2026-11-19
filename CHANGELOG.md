@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.2
+
+_2026-11-19_
+
+### Fixed
+- The configuration schema no longer shares one array between the notification state settings, which the Signal K plugin CI reports as a circular reference.
+
 ## 1.1.1
 
 _2026-11-19_
