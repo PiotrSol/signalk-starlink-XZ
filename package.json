@@ -1,6 +1,6 @@
 {
   "name": "signalk-starlink-xz",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Signal K plugin that reminds you to switch off paid Starlink Ocean Mode when back in territorial waters (country code leaves XZ), and to switch it on beyond 12 nm; also notifies when Starlink goes offline",
   "main": "index.js",
   "signalk-plugin-enabled-by-default": true,

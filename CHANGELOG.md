@@ -1,11 +1,25 @@
 # Changelog
 
-## [1.1.0] - 2026-11-07
+## 1.1.1
+
+_2026-11-19_
+
+### Added
+- Signal K plugin CI (the shared `plugin-ci.yml` workflow), so the App Store shows test results for Linux, Raspberry Pi, macOS and Windows.
+
+### Changed
+- Changelog headings use the plain `## x.y.z` form that the App Store reads.
+
+## 1.1.0
+
+_2026-11-07_
 
 ### Added
 - **Unexpected location alert**: the dish's `unexpected_location` alert is published as `alerts.unexpected_location` (true or false) and shown in the status line ("Starlink is online, country FR, unexpected location"). A notification on `notifications.network.providers.starlink.unexpected_location` says "Starlink reports an unexpected location: check that your plan covers this area" when the alert turns on, and returns to `normal` when it turns off. The notification can be switched off, and its state is a setting (`warn` by default).
 
-## [1.0.0] - 2026-11-07
+## 1.0.0
+
+_2026-11-07_
 
 First release as **signalk-starlink-xz**, forked from signalk-starlink 1.1.0 by Ilker Temir.
 
