@@ -64,7 +64,7 @@ function start (options = {}, dish = fakeDish()) {
 
 describe('readStatus', () => {
   it('reads an online dish', () => {
-    assert.deepEqual(readStatus(online('ES')), { online: true, countryCode: 'ES', unexpectedLocation: false, outage: null })
+    assert.deepEqual(readStatus(online('ES')), { online: true, countryCode: 'ES', unexpectedLocation: false, downlink: null, uplink: null, latency: null, outage: null })
     assert.equal(readStatus(online('FR', true)).unexpectedLocation, true)
   })
 
@@ -79,8 +79,21 @@ describe('readStatus', () => {
   it('never throws on a response without status or device info', () => {
     assert.equal(readStatus(null), null)
     assert.equal(readStatus({}), null)
-    assert.deepEqual(readStatus({ dish_get_status: {} }), { online: true, countryCode: null, unexpectedLocation: false, outage: null })
+    assert.deepEqual(readStatus({ dish_get_status: {} }), { online: true, countryCode: null, unexpectedLocation: false, downlink: null, uplink: null, latency: null, outage: null })
     assert.equal(readStatus({ dish_get_status: { device_info: { country_code: '' } } }).countryCode, null)
+  })
+
+  it('reads throughput and latency, with no latency during an outage', () => {
+    const r = online('ES')
+    Object.assign(r.dish_get_status, { downlink_throughput_bps: 12500000.5, uplink_throughput_bps: 830000, pop_ping_latency_ms: 31.2 })
+    const s = readStatus(r)
+    assert.equal(s.downlink, 12500000.5)
+    assert.equal(s.uplink, 830000)
+    assert.equal(s.latency, 31.2)
+    const o = offline('NO_SATS')
+    o.dish_get_status.pop_ping_latency_ms = 20
+    assert.equal(readStatus(o).latency, null)
+    assert.equal(readStatus({ dish_get_status: { downlink_throughput_bps: 'x', uplink_throughput_bps: -1 } }).downlink, null)
   })
 })
 
@@ -253,6 +266,54 @@ describe('the plugin', () => {
     ({ app, plugin } = start({ unexpectedLocationNotificationState: 'alarm' }, dish))
     assert.equal(app.last(`notifications.${STARLINK}.unexpected_location`).value.state, 'alarm')
     plugin.stop()
+  })
+
+  it('publishes throughput and latency with the status', () => {
+    const dish = fakeDish()
+    const r = online('ES')
+    Object.assign(r.dish_get_status, { downlink_throughput_bps: 25000000, uplink_throughput_bps: 1200000, pop_ping_latency_ms: 28 })
+    dish.queue.push(r)
+    const { app, plugin } = start({}, dish)
+    assert.equal(app.last(`${STARLINK}.status`).value, 'online')
+    assert.equal(app.last(`${STARLINK}.downlink_throughput`).value, 25000000)
+    assert.equal(app.last(`${STARLINK}.uplink_throughput`).value, 1200000)
+    assert.equal(app.last(`${STARLINK}.latency`).value, 28)
+    plugin.stop()
+  })
+
+  it('reports the link offline when the dish stops answering, once, and online again when it answers', () => {
+    const dish = fakeDish()
+    dish.queue.push(online('ES'), new Error('UNAVAILABLE'), new Error('UNAVAILABLE'), new Error('UNAVAILABLE'), online('ES'))
+    const { app, plugin } = start({}, dish)
+    assert.equal(app.last(`${STARLINK}.status`).value, 'online')
+    mock.timers.tick(60000)
+    assert.equal(app.last(`${STARLINK}.status`).value, 'online', 'one missed poll is not yet offline')
+    mock.timers.tick(60000)
+    assert.equal(app.last(`${STARLINK}.status`).value, 'offline')
+    assert.equal(app.last(`${STARLINK}.outage.cause`).value, 'NO_RESPONSE')
+    assert.ok(app.last(`${STARLINK}.outage.start`).value)
+    assert.equal(app.last(`${STARLINK}.latency`).value, null)
+    const n = app.last(`notifications.${STARLINK}.status`).value
+    assert.equal(n.state, 'warn')
+    assert.match(n.message, /does not answer/)
+    assert.match(app.status, /no answer from the dish/)
+    const count = app.values.filter((v) => v.path === `notifications.${STARLINK}.status`).length
+    mock.timers.tick(60000)
+    assert.equal(app.values.filter((v) => v.path === `notifications.${STARLINK}.status`).length, count, 'announced once')
+    mock.timers.tick(60000)
+    assert.equal(app.last(`${STARLINK}.status`).value, 'online')
+    assert.equal(app.last(`notifications.${STARLINK}.status`).value.state, 'normal')
+    assert.equal(app.last(`${STARLINK}.outage.cause`).value, null)
+    plugin.stop()
+  })
+
+  it('sets the link values to null on stop, so nobody reads a stale state', () => {
+    const { app, plugin } = start()
+    assert.equal(app.last(`${STARLINK}.status`).value, 'online')
+    plugin.stop()
+    for (const p of ['status', 'downlink_throughput', 'uplink_throughput', 'latency']) {
+      assert.equal(app.last(`${STARLINK}.${p}`).value, null, p)
+    }
   })
 
   it('starts afresh after a restart and closes the client on stop', () => {
