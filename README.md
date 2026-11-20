@@ -1,4 +1,4 @@
-# signalk-starlink-xz: Starlink Ocean Mode reminder
+# signalk-starlink-xz: Starlink Ocean Mode reminder and METERED status
 
 **The main purpose of this Signal K plugin is to remind you to switch off Starlink Ocean Mode (paid priority data, billed per GB) when you are back in territorial waters.**
 
@@ -8,6 +8,8 @@ Ocean Mode keeps billing per GB until it is switched off by hand, including afte
 - when it **becomes `XZ`** (international waters, beyond 12 nm): switch Ocean Mode on, or there is no service;
 - when the dish reports an **unexpected location** (somewhere its service plan does not currently cover);
 - when **Starlink goes offline**, naming the cause (for example `OBSTRUCTED` or `NO_SATS`), and when it comes back.
+
+**It also reports the link as METERED while you are in international waters.** There every gigabyte is paid, so the plugin sets `network.internet.state` to `metered` (and `network.providers.starlink.metered` to `true`). Plugins that download charts, weather files or updates, or upload logs, read this to hold back heavy transfers until you are back on an unmetered link. Back in a country's waters, or when Starlink is down, the value is cleared again. No other plugin, such as signalk-internet, is needed for this. See [For other plugins](#for-other-plugins).
 
 ## Why the country code matters
 
@@ -38,28 +40,27 @@ The outage values are set to `null` when Starlink is back online.
 
 ### For other plugins
 
-`status` is the link state for plugins that use the internet, so it always reflects the dish:
+**METERED status.** Plugins that use the internet commonly read `network.internet.state` (`online`, `offline`, `metered`). This plugin sets it to **`metered`** while Starlink is online in international waters (`XZ`), where every gigabyte is paid, so those plugins hold back heavy downloads and uploads until the vessel is back on an unmetered link. No other plugin is needed for this.
 
-- `online` only while the dish answers and reports no outage.
-- `offline` during an outage, and also when the dish stops answering for two polls in a row (it is rebooting, has no power, or the network to it is down), so that nobody goes on reading the last `online`.
+- It only ever says `metered`. When Starlink goes offline or leaves `XZ`, or the plugin stops, it clears the value it set with `null`; outside `XZ` it sends nothing.
+- So a boat with another uplink (LTE, marina Wi-Fi) is never reported offline because Starlink is down, and another source of the path is not overwritten.
+- `network.providers.starlink.metered` gives the same as a boolean: `true` in `XZ`, `false` in a country's waters, `null` until the country is known.
+- The setting *Publish network.internet.state = metered in international waters (XZ)* turns the `network.internet.state` part off.
+
+**Link state.** `network.providers.starlink.status` always reflects the dish:
+
+- `online` only while the dish answers and reports no outage;
+- `offline` during an outage, and also when the dish stops answering for two polls in a row (it is rebooting, has no power, or the network to it is down), so that nobody goes on reading the last `online`;
 - `null` when the plugin stops: nothing reports on the link.
 
-- `metered` tells whether that link costs per gigabyte: `true` while the country code is `XZ`. `status` itself stays `online` or `offline`, as plugins written for the original expect.
+`status` stays `online` or `offline`, never `metered`, as plugins written for the original [signalk-starlink](https://github.com/itemir/signalk-starlink) expect; its paths and values, including throughput and latency, are the same.
 
-### `network.internet.state`
-
-Plugins that use the internet commonly read `network.internet.state` (`online`, `offline`, `metered`), the path [signalk-internet](https://github.com/meri-imperiumi/signalk-internet) publishes. This plugin sets it to **`metered`** while Starlink is online in international waters (`XZ`), so those plugins hold back heavy downloads while data is paid, without signalk-internet installed.
-
-It only ever says `metered`: when Starlink goes offline or leaves `XZ`, or the plugin stops, it clears the value it set with `null`, and outside `XZ` it sends nothing. So a boat with another uplink (LTE, marina Wi-Fi) is not reported offline because Starlink is down, and another source of the path is not overwritten. The setting *Publish network.internet.state = metered in international waters* turns it off.
-
-These are the paths and values of the original [signalk-starlink](https://github.com/itemir/signalk-starlink), so [signalk-internet](https://github.com/meri-imperiumi/signalk-internet) works with this plugin out of the box: its default mapping reads `network.providers.starlink.status` = `online`, and its plotter view shows the throughput and latency. In signalk-internet's settings, add:
+**With signalk-internet.** [signalk-internet](https://github.com/meri-imperiumi/signalk-internet) is not needed, but works alongside: its default mapping reads `status` = `online`, and its plotter view shows the throughput and latency. If you use it, turn off this plugin's *Publish network.internet.state* setting, so only one plugin writes that path, and add in signalk-internet's settings:
 
 | Setting | Path | Value | State |
 | :--- | :--- | :--- | :--- |
 | Contextual State Rules | `network.providers.starlink.metered` | `true` | `metered` |
 | Hardware Delta Mappings | `network.providers.starlink.status` | `offline` | `offline` |
-
-The first makes `network.internet.state` read `metered` in international waters, so other plugins hold back heavy downloads while data is paid; as a contextual rule it only turns a reachable link into `metered`, never a dead one into a working one. The second switches to `offline` the moment Starlink drops, without waiting for signalk-internet's own probe.
 
 Notifications:
 
@@ -82,7 +83,7 @@ Notifications:
 | Clear the country code notification after (min) | 0 | 0 keeps it until the next change, so that the crew acts on it |
 | Send a notification when the dish reports an unexpected location | on | |
 | Unexpected location notification state | `warn` | |
-| Publish network.internet.state = metered in international waters (XZ) | on | See [`network.internet.state`](#networkinternetstate) |
+| Publish network.internet.state = metered in international waters (XZ) | on | See [For other plugins](#for-other-plugins) |
 
 ## How it works
 

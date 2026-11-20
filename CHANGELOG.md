@@ -1,11 +1,20 @@
 # Changelog
 
+## 1.3.1
+
+_2026-11-20_
+
+### Changed
+- Plugin, package and README descriptions name the METERED status: `network.internet.state` = `metered` and `network.providers.starlink.metered` = `true` in international waters (`XZ`).
+- Keywords `metered`, `internet` and `network`, so the App Store finds the plugin by them.
+
 ## 1.3.0
 
 _2026-11-20_
 
 ### Added
-- `network.internet.state` = `metered` while Starlink is online in international waters (`XZ`), for plugins that hold back heavy downloads on a paid link. Cleared with `null` when that ends or the plugin stops; nothing is sent otherwise, so another uplink or another source of the path is left alone. On by default, with a setting to turn it off.
+- **METERED status:** `network.internet.state` = `metered` while Starlink is online in international waters (`XZ`), where data is paid by the gigabyte. Plugins that use the internet read this path to hold back heavy downloads and uploads; signalk-internet is not needed. Cleared with `null` when Starlink goes offline, the vessel leaves `XZ` or the plugin stops; nothing is sent otherwise, so another uplink (LTE, marina Wi-Fi) is never reported offline and another source of the path is left alone.
+- Setting *Publish network.internet.state = metered in international waters (XZ)*, on by default.
 
 ## 1.2.0
 
@@ -15,7 +24,7 @@ _2026-11-20_
 - `downlink_throughput` and `uplink_throughput` (bit/s) and `latency` (ms), as the original signalk-starlink published them, for plugins such as signalk-internet.
 - The link is reported `offline`, with the cause `NO_RESPONSE` and one notification, when the dish does not answer two polls in a row.
 - `status` and the throughput and latency values are set to `null` when the plugin stops, so other plugins never read a stale state.
-- `metered`: `true` in international waters (country code `XZ`), where Starlink data is paid by the gigabyte, so signalk-internet can report the connection as `metered`.
+- `network.providers.starlink.metered`: `true` in international waters (country code `XZ`), where Starlink data is paid by the gigabyte, `false` in a country's waters, `null` until the country is known.
 - Descriptions for the link paths.
 
 ## 1.1.2

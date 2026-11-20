@@ -150,7 +150,7 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
   const plugin = {
     id: PLUGIN_ID,
     name: 'Starlink XZ: Ocean Mode reminder',
-    description: 'Reminds you to switch off paid Starlink Ocean Mode when back in territorial waters (country code leaves XZ), and to switch it on when entering international waters; also notifies when Starlink goes offline, and publishes the link state, throughput and latency for other plugins such as signalk-internet'
+    description: 'Reminds you to switch Starlink Ocean Mode off when back in territorial waters (country code leaves XZ) and on in international waters; reports the link as METERED there (network.internet.state = metered) so other plugins hold back heavy downloads; publishes the Starlink link state, throughput and latency, and notifies when Starlink goes offline'
   }
 
   // Everything the plugin remembers lives here and is created anew by
