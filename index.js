@@ -31,6 +31,11 @@ const PLUGIN_ID = 'signalk-starlink-xz'
 const STARLINK = 'network.providers.starlink'
 const INTERNATIONAL_WATERS = 'XZ'
 const ERRORS_BEFORE_RECONNECT = 5
+// Polls without an answer before the link counts as offline. One missed
+// poll can be a busy dish; two in a row means the dish is rebooting, has no
+// power or the network to it is down, and Starlink internet with it.
+const ERRORS_BEFORE_OFFLINE = 2
+const NO_RESPONSE = 'NO_RESPONSE'
 const STATES = ['alert', 'warn', 'alarm', 'emergency']
 const DEFAULTS = {
   address: '192.168.100.1:9200',
@@ -60,6 +65,12 @@ function defaultCreateClient (address) {
   return new Device(address, grpc.credentials.createInsecure())
 }
 
+/** A finite number of zero or more, or null. */
+function nonNegative (value) {
+  const n = Number(value)
+  return value !== undefined && value !== null && Number.isFinite(n) && n >= 0 ? n : null
+}
+
 /** Seconds from a nanosecond count (a string, as gRPC int64 arrives), or null. */
 function nsToSeconds (ns) {
   const n = Number(ns)
@@ -74,7 +85,8 @@ function nsToIso (ns) {
 
 /**
  * What the plugin needs from a get_status response:
- * { online, countryCode, unexpectedLocation, outage: { cause, start, duration } | null }, or
+ * { online, countryCode, unexpectedLocation, downlink, uplink, latency,
+ *   outage: { cause, start, duration } | null }, or
  * null when the response holds no dish status. Every field is checked, so
  * a dish that leaves one out never throws.
  */
@@ -88,6 +100,12 @@ function readStatus (response) {
     online: !outage,
     countryCode: typeof info.country_code === 'string' && info.country_code ? info.country_code : null,
     unexpectedLocation: alerts.unexpected_location === true,
+    // Throughput in bit/s and latency to the point of presence in ms, as
+    // the original signalk-starlink published them and signalk-internet
+    // shows them.
+    downlink: nonNegative(status.downlink_throughput_bps),
+    uplink: nonNegative(status.uplink_throughput_bps),
+    latency: outage ? null : nonNegative(status.pop_ping_latency_ms),
     outage: outage
       ? {
           cause: outage.cause || 'UNKNOWN',
@@ -129,7 +147,7 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
   const plugin = {
     id: PLUGIN_ID,
     name: 'Starlink XZ: Ocean Mode reminder',
-    description: 'Reminds you to switch off paid Starlink Ocean Mode when back in territorial waters (country code leaves XZ), and to switch it on when entering international waters; also notifies when Starlink goes offline'
+    description: 'Reminds you to switch off paid Starlink Ocean Mode when back in territorial waters (country code leaves XZ), and to switch it on when entering international waters; also notifies when Starlink goes offline, and publishes the link state, throughput and latency for other plugins such as signalk-internet'
   }
 
   // Everything the plugin remembers lives here and is created anew by
@@ -208,7 +226,12 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
 
   /** Turns one dish status into Signal K values and notifications. */
   function publish (r, s) {
-    const values = [{ path: `${STARLINK}.status`, value: s.online ? 'online' : 'offline' }]
+    const values = [
+      { path: `${STARLINK}.status`, value: s.online ? 'online' : 'offline' },
+      { path: `${STARLINK}.downlink_throughput`, value: s.downlink },
+      { path: `${STARLINK}.uplink_throughput`, value: s.uplink },
+      { path: `${STARLINK}.latency`, value: s.latency }
+    ]
 
     if (s.outage) {
       values.push(
@@ -287,6 +310,34 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
     }, minutes * 60000)
   }
 
+  /**
+   * The dish has not answered: the link counts as offline, so that plugins
+   * reading the status (such as signalk-internet) do not go on seeing the
+   * last "online". Announced once, with the time of the first missed poll.
+   */
+  function unreachable (r) {
+    if (r.lastCause === NO_RESPONSE) return
+    const values = [
+      { path: `${STARLINK}.status`, value: 'offline' },
+      { path: `${STARLINK}.downlink_throughput`, value: null },
+      { path: `${STARLINK}.uplink_throughput`, value: null },
+      { path: `${STARLINK}.latency`, value: null },
+      { path: `${STARLINK}.outage.cause`, value: NO_RESPONSE },
+      { path: `${STARLINK}.outage.start`, value: r.firstMiss },
+      { path: `${STARLINK}.outage.duration`, value: null }
+    ]
+    if (r.options.enableStatusNotification !== false) {
+      values.push({
+        path: `notifications.${STARLINK}.status`,
+        value: notification(r.options.statusNotificationState || 'warn', `Starlink is offline: the dish at ${r.address} does not answer`)
+      })
+    }
+    send(values)
+    app.setPluginStatus(`Starlink is offline: no answer from the dish at ${r.address} since ${r.firstMiss}`)
+    r.lastOnline = false
+    r.lastCause = NO_RESPONSE
+  }
+
   function reconnect (r) {
     try { r.client.close() } catch (e) { /* already closed */ }
     r.client = createClient(r.address)
@@ -303,7 +354,10 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
       const s = error ? null : readStatus(response)
       if (!s) {
         r.errorCount++
+        r.missCount++
+        if (r.missCount === 1) r.firstMiss = new Date().toISOString()
         app.debug(`No status from Starlink at ${r.address}: ${error ? error.message : 'empty response'}`)
+        if (r.missCount >= ERRORS_BEFORE_OFFLINE) unreachable(r)
         if (r.errorCount === ERRORS_BEFORE_RECONNECT) {
           if (app.setPluginError) app.setPluginError(`Cannot reach Starlink at ${r.address}`)
           reconnect(r)
@@ -311,6 +365,7 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
         }
       } else {
         r.errorCount = 0
+        r.missCount = 0
         publish(r, s)
       }
       r.timer = setTimeout(() => poll(r), r.pollInterval * 1000)
@@ -329,6 +384,8 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
       timer: null,
       clearTimer: null,
       errorCount: 0,
+      missCount: 0,
+      firstMiss: null,
       lastOnline: undefined,
       lastCause: undefined,
       lastCountryCode: undefined,
@@ -336,7 +393,17 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
       stopped: false
     }
     run.client = createClient(run.address)
-    app.handleMessage(PLUGIN_ID, { updates: [{ meta: [{ path: `${STARLINK}.outage.duration`, value: { units: 's', description: 'Duration of the current Starlink outage' } }] }] })
+    app.handleMessage(PLUGIN_ID, {
+      updates: [{
+        meta: [
+          { path: `${STARLINK}.outage.duration`, value: { units: 's', description: 'Duration of the current Starlink outage' } },
+          { path: `${STARLINK}.status`, value: { description: 'Starlink link: online or offline; null while nothing reports on it' } },
+          { path: `${STARLINK}.downlink_throughput`, value: { description: 'Starlink download throughput, bit/s' } },
+          { path: `${STARLINK}.uplink_throughput`, value: { description: 'Starlink upload throughput, bit/s' } },
+          { path: `${STARLINK}.latency`, value: { description: 'Starlink latency to the point of presence, ms' } }
+        ]
+      }]
+    })
     app.setPluginStatus(`Connecting to Starlink at ${run.address}`)
     poll(run) // first poll at once, not after a full interval
   }
@@ -344,6 +411,14 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
   plugin.stop = function () {
     if (!run) return
     run.stopped = true
+    // Nothing reports on the link any more: say so rather than leave the
+    // last state standing for other plugins.
+    send([
+      { path: `${STARLINK}.status`, value: null },
+      { path: `${STARLINK}.downlink_throughput`, value: null },
+      { path: `${STARLINK}.uplink_throughput`, value: null },
+      { path: `${STARLINK}.latency`, value: null }
+    ])
     clearTimeout(run.timer)
     clearTimeout(run.clearTimer)
     try { run.client.close() } catch (e) { /* already closed */ }

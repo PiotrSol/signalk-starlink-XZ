@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0
+
+_2026-11-20_
+
+### Added
+- `downlink_throughput` and `uplink_throughput` (bit/s) and `latency` (ms), as the original signalk-starlink published them, for plugins such as signalk-internet.
+- The link is reported `offline`, with the cause `NO_RESPONSE` and one notification, when the dish does not answer two polls in a row.
+- `status` and the throughput and latency values are set to `null` when the plugin stops, so other plugins never read a stale state.
+- Descriptions for the link paths.
+
 ## 1.1.2
 
 _2026-11-19_

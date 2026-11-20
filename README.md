@@ -23,14 +23,27 @@ Under `network.providers.starlink`:
 
 | Path | Value |
 | :--- | :--- |
-| `status` | `online` or `offline` |
+| `status` | `online` or `offline`; `null` while the plugin is stopped |
+| `downlink_throughput` | Download throughput, bit/s |
+| `uplink_throughput` | Upload throughput, bit/s |
+| `latency` | Latency to the Starlink point of presence, ms; `null` during an outage |
 | `country_code` | ISO 3166 country code, or `XZ` in international waters |
 | `alerts.unexpected_location` | `true` while the dish reports an unexpected location |
-| `outage.cause` | Reason for the outage, while offline (for example `OBSTRUCTED`, `NO_SATS`, `STOWED`, `BOOTING`) |
+| `outage.cause` | Reason for the outage, while offline (for example `OBSTRUCTED`, `NO_SATS`, `STOWED`, `BOOTING`), or `NO_RESPONSE` when the dish does not answer |
 | `outage.start` | Start of the outage, ISO date |
 | `outage.duration` | Duration of the outage so far, in seconds |
 
 The outage values are set to `null` when Starlink is back online.
+
+### For other plugins
+
+`status` is the link state for plugins that use the internet, so it always reflects the dish:
+
+- `online` only while the dish answers and reports no outage.
+- `offline` during an outage, and also when the dish stops answering for two polls in a row (it is rebooting, has no power, or the network to it is down), so that nobody goes on reading the last `online`.
+- `null` when the plugin stops: nothing reports on the link.
+
+These are the paths and values of the original [signalk-starlink](https://github.com/itemir/signalk-starlink), so [signalk-internet](https://github.com/meri-imperiumi/signalk-internet) works with this plugin out of the box: its default mapping reads `network.providers.starlink.status` = `online`, and its plotter view shows the throughput and latency. To have signalk-internet switch to `offline` the moment Starlink drops, without waiting for its own probe, add a hardware mapping `network.providers.starlink.status` = `offline` → `offline` in its settings.
 
 Notifications:
 
@@ -56,7 +69,7 @@ Notifications:
 
 ## How it works
 
-The plugin asks the dish for its status over its local gRPC interface. Each call has a deadline, and the next poll starts only after the dish has answered or the call has timed out, so slow answers never pile up. After five failed polls in a row, the plugin reports an error and reconnects. All state is reset on every start, so a restart from the admin UI begins cleanly.
+The plugin asks the dish for its status over its local gRPC interface. Each call has a deadline, and the next poll starts only after the dish has answered or the call has timed out, so slow answers never pile up. After two polls in a row without an answer, the link is reported `offline` (cause `NO_RESPONSE`), with one notification; after five, the plugin also reports an error and reconnects. All state is reset on every start, so a restart from the admin UI begins cleanly.
 
 ## Installation
 
