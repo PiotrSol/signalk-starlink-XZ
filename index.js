@@ -36,6 +36,9 @@ const ERRORS_BEFORE_RECONNECT = 5
 // power or the network to it is down, and Starlink internet with it.
 const ERRORS_BEFORE_OFFLINE = 2
 const NO_RESPONSE = 'NO_RESPONSE'
+// The shared internet state that plugins using the internet read (the path
+// signalk-internet publishes). This plugin only ever sets it to "metered".
+const INTERNET_STATE = 'network.internet.state'
 const STATES = ['alert', 'warn', 'alarm', 'emergency']
 const DEFAULTS = {
   address: '192.168.100.1:9200',
@@ -204,6 +207,12 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
         default: 'warn',
         enum: [...STATES]
       },
+      publishMeteredInternetState: {
+        type: 'boolean',
+        title: 'Publish network.internet.state = metered in international waters (XZ)',
+        description: 'For plugins that hold back heavy downloads on a metered link. Set only while Starlink is online in XZ, and cleared (null) when it is not; nothing is published otherwise, so it does not overwrite another source of this path.',
+        default: true
+      },
       countryCodeNotificationClearMinutes: {
         type: 'number',
         title: 'Clear the country code notification after (min)',
@@ -299,6 +308,7 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
 
     send(values)
     app.setPluginStatus(statusLine(s))
+    internetState(r, s.online)
     r.lastOnline = s.online
     r.lastCause = cause
   }
@@ -320,6 +330,22 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
    * reading the status (such as signalk-internet) do not go on seeing the
    * last "online". Announced once, with the time of the first missed poll.
    */
+  /**
+   * network.internet.state: "metered" while Starlink is online in XZ. When
+   * that stops, the value this plugin set is cleared with null; any other
+   * time nothing is sent, so another source of the path is left alone.
+   */
+  function internetState (r, online) {
+    const metered = r.options.publishMeteredInternetState !== false && online && r.metered === true
+    if (metered && r.internet !== 'metered') {
+      send([{ path: INTERNET_STATE, value: 'metered' }])
+      r.internet = 'metered'
+    } else if (!metered && r.internet === 'metered') {
+      send([{ path: INTERNET_STATE, value: null }])
+      r.internet = null
+    }
+  }
+
   function unreachable (r) {
     if (r.lastCause === NO_RESPONSE) return
     const values = [
@@ -338,6 +364,7 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
       })
     }
     send(values)
+    internetState(r, false)
     app.setPluginStatus(`Starlink is offline: no answer from the dish at ${r.address} since ${r.firstMiss}`)
     r.lastOnline = false
     r.lastCause = NO_RESPONSE
@@ -395,6 +422,7 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
       lastCause: undefined,
       lastCountryCode: undefined,
       metered: null,
+      internet: null,
       lastUnexpectedLocation: undefined,
       stopped: false
     }
@@ -427,6 +455,7 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
       { path: `${STARLINK}.latency`, value: null },
       { path: `${STARLINK}.metered`, value: null }
     ])
+    if (run.internet === 'metered') send([{ path: INTERNET_STATE, value: null }])
     clearTimeout(run.timer)
     clearTimeout(run.clearTimer)
     try { run.client.close() } catch (e) { /* already closed */ }

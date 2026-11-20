@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0
+
+_2026-11-20_
+
+### Added
+- `network.internet.state` = `metered` while Starlink is online in international waters (`XZ`), for plugins that hold back heavy downloads on a paid link. Cleared with `null` when that ends or the plugin stops; nothing is sent otherwise, so another uplink or another source of the path is left alone. On by default, with a setting to turn it off.
+
 ## 1.2.0
 
 _2026-11-20_
