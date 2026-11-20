@@ -322,6 +322,38 @@ describe('the plugin', () => {
     plugin.stop()
   })
 
+  it('sets network.internet.state to metered only while online in XZ, and clears only what it set', () => {
+    const dish = fakeDish()
+    dish.queue.push(online('ES'), online('XZ'), offline('NO_SATS', 'XZ'), online('XZ'), online('PT'))
+    const { app, plugin } = start({}, dish)
+    const states = () => app.values.filter((v) => v.path === 'network.internet.state').map((v) => v.value)
+    assert.deepEqual(states(), [], 'nothing outside XZ')
+    mock.timers.tick(60000)
+    assert.deepEqual(states(), ['metered'])
+    mock.timers.tick(60000)
+    assert.deepEqual(states(), ['metered', null], 'cleared while Starlink is down')
+    mock.timers.tick(60000)
+    assert.deepEqual(states(), ['metered', null, 'metered'])
+    mock.timers.tick(60000)
+    assert.deepEqual(states(), ['metered', null, 'metered', null], 'cleared on leaving XZ')
+    mock.timers.tick(60000)
+    assert.deepEqual(states(), ['metered', null, 'metered', null], 'no repeats')
+    plugin.stop()
+  })
+
+  it('clears network.internet.state on stop if it set it, and can be switched off', () => {
+    const dish = fakeDish()
+    dish.queue.push(online('XZ'))
+    const { app, plugin } = start({}, dish)
+    assert.equal(app.last('network.internet.state').value, 'metered')
+    plugin.stop()
+    assert.equal(app.last('network.internet.state').value, null)
+    const off = start({ publishMeteredInternetState: false }, (() => { const d = fakeDish(); d.queue.push(online('XZ')); return d })())
+    assert.equal(off.app.last('network.internet.state'), undefined)
+    off.plugin.stop()
+    assert.equal(off.app.last('network.internet.state'), undefined)
+  })
+
   it('has metered null until a country code is known', () => {
     const dish = fakeDish()
     dish.queue.push({ dish_get_status: { outage: null, device_info: {} } })
