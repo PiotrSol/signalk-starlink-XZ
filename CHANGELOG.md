@@ -8,6 +8,7 @@ _2026-11-20_
 - `downlink_throughput` and `uplink_throughput` (bit/s) and `latency` (ms), as the original signalk-starlink published them, for plugins such as signalk-internet.
 - The link is reported `offline`, with the cause `NO_RESPONSE` and one notification, when the dish does not answer two polls in a row.
 - `status` and the throughput and latency values are set to `null` when the plugin stops, so other plugins never read a stale state.
+- `metered`: `true` in international waters (country code `XZ`), where Starlink data is paid by the gigabyte, so signalk-internet can report the connection as `metered`.
 - Descriptions for the link paths.
 
 ## 1.1.2

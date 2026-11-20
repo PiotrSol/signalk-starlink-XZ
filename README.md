@@ -27,6 +27,7 @@ Under `network.providers.starlink`:
 | `downlink_throughput` | Download throughput, bit/s |
 | `uplink_throughput` | Upload throughput, bit/s |
 | `latency` | Latency to the Starlink point of presence, ms; `null` during an outage |
+| `metered` | `true` in international waters (country code `XZ`), where Starlink data is paid by the gigabyte (Ocean Mode); `false` in a country's waters; `null` until a country code is known |
 | `country_code` | ISO 3166 country code, or `XZ` in international waters |
 | `alerts.unexpected_location` | `true` while the dish reports an unexpected location |
 | `outage.cause` | Reason for the outage, while offline (for example `OBSTRUCTED`, `NO_SATS`, `STOWED`, `BOOTING`), or `NO_RESPONSE` when the dish does not answer |
@@ -43,7 +44,16 @@ The outage values are set to `null` when Starlink is back online.
 - `offline` during an outage, and also when the dish stops answering for two polls in a row (it is rebooting, has no power, or the network to it is down), so that nobody goes on reading the last `online`.
 - `null` when the plugin stops: nothing reports on the link.
 
-These are the paths and values of the original [signalk-starlink](https://github.com/itemir/signalk-starlink), so [signalk-internet](https://github.com/meri-imperiumi/signalk-internet) works with this plugin out of the box: its default mapping reads `network.providers.starlink.status` = `online`, and its plotter view shows the throughput and latency. To have signalk-internet switch to `offline` the moment Starlink drops, without waiting for its own probe, add a hardware mapping `network.providers.starlink.status` = `offline` → `offline` in its settings.
+- `metered` tells whether that link costs per gigabyte: `true` while the country code is `XZ`. `status` itself stays `online` or `offline`, as plugins written for the original expect.
+
+These are the paths and values of the original [signalk-starlink](https://github.com/itemir/signalk-starlink), so [signalk-internet](https://github.com/meri-imperiumi/signalk-internet) works with this plugin out of the box: its default mapping reads `network.providers.starlink.status` = `online`, and its plotter view shows the throughput and latency. In signalk-internet's settings, add:
+
+| Setting | Path | Value | State |
+| :--- | :--- | :--- | :--- |
+| Contextual State Rules | `network.providers.starlink.metered` | `true` | `metered` |
+| Hardware Delta Mappings | `network.providers.starlink.status` | `offline` | `offline` |
+
+The first makes `network.internet.state` read `metered` in international waters, so other plugins hold back heavy downloads while data is paid; as a contextual rule it only turns a reachable link into `metered`, never a dead one into a working one. The second switches to `offline` the moment Starlink drops, without waiting for signalk-internet's own probe.
 
 Notifications:
 

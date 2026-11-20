@@ -249,6 +249,11 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
     }
 
     if (s.countryCode) values.push({ path: `${STARLINK}.country_code`, value: s.countryCode })
+    // In international waters (XZ) Starlink data is paid by the gigabyte
+    // (Ocean Mode), so the link is metered there. Kept from the last known
+    // country code while the dish reports none.
+    if (s.countryCode) r.metered = s.countryCode === INTERNATIONAL_WATERS
+    values.push({ path: `${STARLINK}.metered`, value: r.metered })
     values.push({ path: `${STARLINK}.alerts.unexpected_location`, value: s.unexpectedLocation })
 
     // Unexpected location: notify when the alert turns on, clear when it
@@ -389,6 +394,7 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
       lastOnline: undefined,
       lastCause: undefined,
       lastCountryCode: undefined,
+      metered: null,
       lastUnexpectedLocation: undefined,
       stopped: false
     }
@@ -400,7 +406,8 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
           { path: `${STARLINK}.status`, value: { description: 'Starlink link: online or offline; null while nothing reports on it' } },
           { path: `${STARLINK}.downlink_throughput`, value: { description: 'Starlink download throughput, bit/s' } },
           { path: `${STARLINK}.uplink_throughput`, value: { description: 'Starlink upload throughput, bit/s' } },
-          { path: `${STARLINK}.latency`, value: { description: 'Starlink latency to the point of presence, ms' } }
+          { path: `${STARLINK}.latency`, value: { description: 'Starlink latency to the point of presence, ms' } },
+          { path: `${STARLINK}.metered`, value: { description: 'true in international waters (country code XZ), where Starlink data is paid by the gigabyte (Ocean Mode); null while unknown' } }
         ]
       }]
     })
@@ -417,7 +424,8 @@ module.exports = function (app, { createClient = defaultCreateClient } = {}) {
       { path: `${STARLINK}.status`, value: null },
       { path: `${STARLINK}.downlink_throughput`, value: null },
       { path: `${STARLINK}.uplink_throughput`, value: null },
-      { path: `${STARLINK}.latency`, value: null }
+      { path: `${STARLINK}.latency`, value: null },
+      { path: `${STARLINK}.metered`, value: null }
     ])
     clearTimeout(run.timer)
     clearTimeout(run.clearTimer)
