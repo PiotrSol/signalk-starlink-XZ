@@ -307,11 +307,34 @@ describe('the plugin', () => {
     plugin.stop()
   })
 
+  it('reports the link metered in international waters (XZ), and keeps it while the dish gives no country', () => {
+    const dish = fakeDish()
+    dish.queue.push(online('ES'), online('XZ'), { dish_get_status: { outage: null, device_info: {} } }, online('PT'))
+    const { app, plugin } = start({}, dish)
+    assert.equal(app.last(`${STARLINK}.metered`).value, false)
+    mock.timers.tick(60000)
+    assert.equal(app.last(`${STARLINK}.metered`).value, true)
+    assert.equal(app.last(`${STARLINK}.status`).value, 'online', 'status stays online or offline for compatibility')
+    mock.timers.tick(60000)
+    assert.equal(app.last(`${STARLINK}.metered`).value, true)
+    mock.timers.tick(60000)
+    assert.equal(app.last(`${STARLINK}.metered`).value, false)
+    plugin.stop()
+  })
+
+  it('has metered null until a country code is known', () => {
+    const dish = fakeDish()
+    dish.queue.push({ dish_get_status: { outage: null, device_info: {} } })
+    const { app, plugin } = start({}, dish)
+    assert.equal(app.last(`${STARLINK}.metered`).value, null)
+    plugin.stop()
+  })
+
   it('sets the link values to null on stop, so nobody reads a stale state', () => {
     const { app, plugin } = start()
     assert.equal(app.last(`${STARLINK}.status`).value, 'online')
     plugin.stop()
-    for (const p of ['status', 'downlink_throughput', 'uplink_throughput', 'latency']) {
+    for (const p of ['status', 'downlink_throughput', 'uplink_throughput', 'latency', 'metered']) {
       assert.equal(app.last(`${STARLINK}.${p}`).value, null, p)
     }
   })
